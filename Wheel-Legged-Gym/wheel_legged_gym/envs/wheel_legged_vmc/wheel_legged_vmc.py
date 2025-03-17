@@ -133,7 +133,7 @@ class LeggedRobotVMC(LeggedRobot):
         self.common_step_counter += 1
 
         # prepare quantities
-        self.base_quat[:] = self.root_states[:, 3:7]
+        self.base_quat[:] = self.root_states[:, 3:7]  
         self.base_lin_vel = (self.base_position - self.last_base_position) / self.dt
         self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.base_lin_vel)
         self.base_ang_vel[:] = quat_rotate_inverse(
@@ -287,17 +287,17 @@ class LeggedRobotVMC(LeggedRobot):
         obs_buf = torch.cat(
             (
                 # self.base_lin_vel * self.obs_scales.lin_vel,
-                self.base_ang_vel * self.obs_scales.ang_vel,
-                self.projected_gravity,
-                self.commands[:, :3] * self.commands_scale,
+                self.base_ang_vel * self.obs_scales.ang_vel,    #角速度
+                self.projected_gravity,                         #重力投影
+                self.commands[:, :4] * self.commands_scale,     #命令 4个
                 # (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
                 # self.dof_vel * self.obs_scales.dof_vel,
-                self.theta0 * self.obs_scales.dof_pos,
-                self.theta0_dot * self.obs_scales.dof_vel,
-                self.L0 * self.obs_scales.l0,
-                self.L0_dot * self.obs_scales.l0_dot,
-                self.dof_pos[:, [2, 5]] * self.obs_scales.dof_pos,
-                self.dof_vel[:, [2, 5]] * self.obs_scales.dof_vel,
+                self.theta0 * self.obs_scales.dof_pos,          #theta0
+                self.theta0_dot * self.obs_scales.dof_vel,      #theta0_dot
+                self.L0 * self.obs_scales.l0,                   #L0 
+                self.L0_dot * self.obs_scales.l0_dot,           #L0_dot
+                self.dof_pos[:, [2, 5]] * self.obs_scales.dof_pos,  # dof_pos  大腿 
+                self.dof_vel[:, [2, 5]] * self.obs_scales.dof_vel,   #dof_vel  小腿
                 self.actions,
             ),
             dim=-1,
@@ -312,7 +312,7 @@ class LeggedRobotVMC(LeggedRobot):
             heights = (
                 torch.clip(
                     self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights,
-                    -1,
+                    -1.0,
                     1.0,
                 )
                 * self.obs_scales.height_measurements
@@ -418,6 +418,24 @@ class LeggedRobotVMC(LeggedRobot):
 
 #由于正运动学解算修改，VMC也要作修改
     def VMC(self, F, T):
+        # theta0 = self.theta0 + self.pi / 2
+        # t11 = -self.cfg.asset.l1 * torch.sin(
+        #     theta0 - self.theta1
+        # ) - self.cfg.asset.l2 * torch.sin(self.theta1 + self.theta2 - theta0)
+
+        # t12 = -self.cfg.asset.l1 * torch.cos(
+        #     theta0 - self.theta1
+        # ) + self.cfg.asset.l2 * torch.cos(self.theta1 + self.theta2 - theta0)
+        # t12 = t12 / self.L0
+
+        # t21 = -self.cfg.asset.l2 * torch.sin(self.theta1 + self.theta2 - theta0)
+
+        # t22 = self.cfg.asset.l2 * torch.cos(self.theta1 + self.theta2 - theta0)
+        # t22 = t22 / self.L0
+
+        # T1 = t11 * F + t12 * T
+        # T2 = t21 * F + t22 * T
+
         theta0 = self.theta0 + self.pi / 2
         t11 = -self.cfg.asset.l1 * torch.sin(
             theta0 - self.theta1
@@ -465,16 +483,33 @@ class LeggedRobotVMC(LeggedRobot):
         #     noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
         # )
         # noise_vec[20 + 3 : 26 + 3] = 0.0  # previous actions
-        noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
-        noise_vec[3:6] = noise_scales.gravity * noise_level
-        noise_vec[6:8] = 0.0  # commands
-        noise_vec[8:10] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
-        noise_vec[10:12] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
-        noise_vec[12:14] = noise_scales.l0 * noise_level * self.obs_scales.l0
-        noise_vec[14:16] = noise_scales.l0_dot * noise_level * self.obs_scales.l0_dot
-        noise_vec[16:18] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
-        noise_vec[18:20] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
-        noise_vec[20:26] = 0.0  # previous actions
+
+
+        # noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
+        # noise_vec[3:6] = noise_scales.gravity * noise_level
+        # noise_vec[6:8] = 0.0  # commands
+        # noise_vec[8:10] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        # noise_vec[10:12] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        # noise_vec[12:14] = noise_scales.l0 * noise_level * self.obs_scales.l0
+        # noise_vec[14:16] = noise_scales.l0_dot * noise_level * self.obs_scales.l0_dot
+        # noise_vec[16:18] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        # noise_vec[18:20] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        # noise_vec[20:26] = 0.0  # previous actions
+
+        #和obs_buf对齐
+        noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel  # 角速度
+        noise_vec[3:6] = noise_scales.gravity * noise_level  # 重力投影
+        noise_vec[6:10] = 0.0  # 命令
+        noise_vec[10:11] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos  # theta0
+        noise_vec[11:12] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel  # theta0_dot
+        noise_vec[12:13] = noise_scales.l0 * noise_level * self.obs_scales.l0  # L0
+        noise_vec[13:14] = noise_scales.l0_dot * noise_level * self.obs_scales.l0_dot  # L0_dot
+        noise_vec[14:16] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos  # dof_pos 大腿
+        noise_vec[16:18] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel  # dof_vel 小腿
+        noise_vec[18:20] = 0.0  # 当前动作  
+
+
+        
         if self.cfg.terrain.measure_heights:
             noise_vec[48:235] = (
                 noise_scales.height_measurements
@@ -495,7 +530,7 @@ class LeggedRobotVMC(LeggedRobot):
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
         # create some wrapper tensors for different slices
-        self.root_states = gymtorch.wrap_tensor(actor_root_state)
+        self.root_states = gymtorch.wrap_tensor(actor_root_state)  #[0:3]机器人xyz位置，[3:7]机器人四元数，[7:10]机器人角速度，[10:13]机器人线速度
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
@@ -594,16 +629,18 @@ class LeggedRobotVMC(LeggedRobot):
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
         self.commands = torch.zeros(
             self.num_envs,
-            self.cfg.commands.num_commands + 1,
+            self.cfg.commands.num_commands + 1, #4
             dtype=torch.float,
             device=self.device,
             requires_grad=False,
         )  # x vel, y vel, yaw vel, heading
+        #和legged_robot里resamble的命令不同 lin_vel_x, ang_vel_yaw, height , heading
         self.commands_scale = torch.tensor(
             [
                 self.obs_scales.lin_vel,
                 self.obs_scales.ang_vel,
                 self.obs_scales.height_measurements,
+                self.obs_scales.heading, #新添加
             ],
             device=self.device,
             requires_grad=False,
@@ -636,6 +673,17 @@ class LeggedRobotVMC(LeggedRobot):
             requires_grad=False,
         )
         self.command_ranges["height"][:] = torch.tensor(self.cfg.commands.ranges.height)
+
+        self.command_ranges["heading"] = torch.zeros(
+            self.num_envs,
+            2,
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
+        )
+
+        self.command_ranges["heading"][:] = torch.tensor(self.cfg.commands.ranges.heading)
+
         self.feet_air_time = torch.zeros(
             self.num_envs,
             self.feet_indices.shape[0],
@@ -643,6 +691,7 @@ class LeggedRobotVMC(LeggedRobot):
             device=self.device,
             requires_grad=False,
         )
+        
         self.last_contacts = torch.zeros(
             self.num_envs,
             len(self.feet_indices),
@@ -816,3 +865,17 @@ class LeggedRobotVMC(LeggedRobot):
             self.action_delay_idx = action_delay_idx.long()
 
     # ------------ reward functions----------------
+
+    #惩罚两腿夹角防止劈叉
+    def _reward_cooperate_angel(self):
+        return torch.sum(torch.square(self.theta0[:,0] - self.theta0[:,1]))
+
+    # #惩罚转弯时的roll轴偏移
+    # #考虑使用离心力，F = m*v*w 和旋转时角速度成正比
+    # def _reward_orientation_enhance(self):
+    #     return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
+    
+
+    #设计一些中间的奖励函数来引导其完成跳跃
+    # def _reward_robot_jump(self):
+        
