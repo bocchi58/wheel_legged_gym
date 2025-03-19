@@ -1,33 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
-
 from wheel_legged_gym import WHEEL_LEGGED_GYM_ROOT_DIR, envs
 from time import time
 from warnings import WarningMessage
@@ -50,12 +20,12 @@ from wheel_legged_gym.utils.math import (
     torch_rand_sqrt_float,
 )
 from wheel_legged_gym.utils.helpers import class_to_dict
-from .wheel_legged_vmc_config import WheelLeggedVMCCfg
+from .bocchi58_wheel_legged_config import Bocchi58WheelLeggedCfg
 
 
-class LeggedRobotVMC(LeggedRobot):
+class Bocchi58WheelLegged(LeggedRobot):
     def __init__(
-        self, cfg: WheelLeggedVMCCfg, sim_params, physics_engine, sim_device, headless
+        self, cfg: Bocchi58WheelLeggedCfg, sim_params, physics_engine, sim_device, headless
     ):
         """Parses the provided config file,
             calls create_sim() (which creates, simulation, terrain and environments),
@@ -70,56 +40,60 @@ class LeggedRobotVMC(LeggedRobot):
             headless (bool): Run without rendering if True
         """
         self.cfg = cfg
+        self.sim_params = sim_params
+        self.height_samples = None
+        self.debug_viz = False
+        self.init_done = False
+        self._parse_cfg(self.cfg)
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
+        self.pi = torch.acos(torch.zeros(1, device=self.device)) * 2
 
-    def step(self, actions):
+        if not self.headless:
+            self.set_camera(self.cfg.viewer.pos, self.cfg.viewer.lookat)
+        self._init_buffers()
+        self._prepare_reward_function()
+        self.init_done = True
+    #主要的推进训练的函数
+    def step(self,actions):
         """Apply actions, simulate, call self.post_physics_step()
 
         Args:
             actions (torch.Tensor): Tensor of shape (num_envs, num_actions_per_env)
         """
         clip_actions = self.cfg.normalization.clip_actions
-        self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
-        # step physics and render each frame
-        self.render()
-        self.pre_physics_step()
+        self.actions = torch.clip(actions,-clip_actions,clip_actions)#对actions进行限幅
+        
+        self.render()#渲染
+
+        self.pre_physics_step()#进行前处理  
         for _ in range(self.cfg.control.decimation):
-            self.leg_post_physics_step()
+            self.leg_post_physics_step()#计算L0 L0_dot Theta0 Theta0_dot
             self.envs_steps_buf += 1
+            #更新缓存
             self.action_fifo = torch.cat(
-                (self.actions.unsqueeze(1), self.action_fifo[:, :-1, :]), dim=1
+                (self.actions.unsqueeze(1),self.action_fifo[:,:-1,:]),dim=1
             )
+            #扭矩求解
             self.torques = self._compute_torques(
-                self.action_fifo[torch.arange(self.num_envs), self.action_delay_idx, :]
+                self.action_fifo[torch.arrange(self.num_envs),self.action_delay_idx,:]
             ).view(self.torques.shape)
-            self.gym.set_dof_actuation_force_tensor(
-                self.sim, gymtorch.unwrap_tensor(self.torques)
+            self.gym.set_dof_actuation_foce_tensor(
+                self.sim,gymtorch.unwrap_tensor(self.torques)
             )
+            #给机器人一个随机的扰动，增强模型的鲁棒性
             if self.cfg.domain_rand.push_robots:
                 self._push_robots()
+            #running the simulate
             self.gym.simulate(self.sim)
             if self.device == "cpu":
-                self.gym.fetch_results(self.sim, True)
+                self.gym.fetch(self.sim,True)
+            #update dof state buffers
             self.gym.refresh_dof_state_tensor(self.sim)
+            #使用差分的方法计算关节速度
             self.compute_dof_vel()
         self.post_physics_step()
 
-        # return clipped obs, clipped states (None), rewards, dones and infos
-        clip_obs = self.cfg.normalization.clip_observations
-        self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
-        if self.privileged_obs_buf is not None:
-            self.privileged_obs_buf = torch.clip(
-                self.privileged_obs_buf, -clip_obs, clip_obs
-            )
-        return (
-            self.obs_buf,
-            self.privileged_obs_buf,
-            self.rew_buf,
-            self.reset_buf,
-            self.extras,
-            self.obs_history,
-        )
-
+    #检查回合是否结束 计算观测值和奖励
     def post_physics_step(self):
         """check terminations, compute observations and rewards
         calls self._post_physics_step_callback() for common computations
@@ -133,17 +107,16 @@ class LeggedRobotVMC(LeggedRobot):
         self.common_step_counter += 1
 
         # prepare quantities
-        self.base_quat[:] = self.root_states[:, 3:7]  
+        self.base_quat[:] = self.root_states[:, 3:7]
         self.base_lin_vel = (self.base_position - self.last_base_position) / self.dt
         self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.base_lin_vel)
         self.base_ang_vel[:] = quat_rotate_inverse(
             self.base_quat, self.root_states[:, 10:13]
         )
-        self.dof_acc = (self.last_dof_vel - self.dof_vel) / self.dt
-
         self.projected_gravity[:] = quat_rotate_inverse(
             self.base_quat, self.gravity_vec
         )
+        self.dof_acc = (self.last_dof_vel - self.dof_vel) / self.dt
 
         self._post_physics_step_callback()
 
@@ -163,26 +136,31 @@ class LeggedRobotVMC(LeggedRobot):
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self._draw_debug_vis()
 
+
+    #求状态量L0 L0_dot theta0 theta0_dot
     def leg_post_physics_step(self):
+        #大腿角度
         self.theta1 = torch.cat(
-            (self.dof_pos[:, 0].unsqueeze(1), -self.dof_pos[:, 3].unsqueeze(1)), dim=1
-        )
+            (self.dof_pos[:,0].unsqueeze(1),-self.dof_pos[:,3].unsqueeze(1)),dim=1)
+        #小腿角度
         self.theta2 = torch.cat(
-            (
-                (self.dof_pos[:, 1] + self.pi / 2).unsqueeze(1),
-                (-self.dof_pos[:, 4] + self.pi / 2).unsqueeze(1),
-            ),
-            dim=1,
+            (self.dof_pos[:, 1] + self.pi / 2).unsqueeze(1),
+            (-self.dof_pos[:, 4] + self.pi / 2).unsqueeze(1),
+            dim = 1
         )
+        #大腿角速度
         theta1_dot = torch.cat(
             (self.dof_vel[:, 0].unsqueeze(1), -self.dof_vel[:, 3].unsqueeze(1)), dim=1
         )
+        #小腿角速度
         theta2_dot = torch.cat(
             (self.dof_vel[:, 1].unsqueeze(1), -self.dof_vel[:, 4].unsqueeze(1)), dim=1
         )
 
-        self.L0, self.theta0 = self.forward_kinematics(self.theta1, self.theta2)
-
+        #虚拟杆
+        self.L0,self.theta0 = self.forward_kinematics(self.theta1,self.theta2)
+        
+        #位置差分求速度
         dt = 0.001
         L0_temp, theta0_temp = self.forward_kinematics(
             self.theta1 + theta1_dot * dt, self.theta2 + theta2_dot * dt
@@ -190,8 +168,9 @@ class LeggedRobotVMC(LeggedRobot):
         self.L0_dot = (L0_temp - self.L0) / dt
         self.theta0_dot = (theta0_temp - self.theta0) / dt
 
-#按照队里串联腿结构重新进行正运动学解算
-    def forward_kinematics(self, theta1, theta2):
+
+    #正运动学解算
+    def forward_kinematics(self,theta1,theta2):
         end_x = (
             -self.cfg.asset.offset
             - self.cfg.asset.l1 * torch.cos(theta1)
@@ -201,9 +180,9 @@ class LeggedRobotVMC(LeggedRobot):
         L0 = torch.sqrt(end_x**2 + end_y**2)
         # theta0 = torch.arctan2(end_y, end_x) - self.pi / 2
         theta0 = -torch.arctan2(end_y, end_x) + self.pi / 2
-        return L0, theta0
-
-    def reset_idx(self, env_ids):
+        return L0, theta0()
+    #根据id重置环境
+    def reset_idx(self,env_ids):
         """Reset some environments.
             Calls self._reset_dofs(env_ids), self._reset_root_states(env_ids), and self._resample_commands(env_ids)
             [Optional] calls self._update_terrain_curriculum(env_ids), self.update_command_curriculum(env_ids) and
@@ -219,21 +198,20 @@ class LeggedRobotVMC(LeggedRobot):
         if self.cfg.terrain.curriculum:
             self._update_terrain_curriculum(env_ids)
             if self.cfg.commands.curriculum:
-                time_out_env_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
+                time_out_env_ids = self.time_out_buf.nozero(as_tuple =False).flatten()
                 self.update_command_curriculum(time_out_env_ids)
-        # avoid updating command curriculum at each step since the maximum command is common to all envs
-        if self.cfg.commands.curriculum and (
+        #avoid updating command curriculum at each step since the maximun command is common to all envs
+        if self.cfg.commands.curriculum and(
             self.common_step_counter % self.max_episode_length == 0
         ):
-            self.update_command_curriculum(env_ids)
+            self._update_terrain_curriculum(env_ids)
 
-        # reset robot states
+        #reset robot states
         self._reset_dofs(env_ids)
         self._reset_root_states(env_ids)
-
         self._resample_commands(env_ids)
 
-        # reset buffers
+        #reset buffers
         self.last_actions[env_ids] = 0.0
         self.last_dof_vel[env_ids] = 0.0
         self.feet_air_time[env_ids] = 0.0
@@ -246,6 +224,7 @@ class LeggedRobotVMC(LeggedRobot):
         self.obs_history[env_ids] = 0
         obs_buf = self.compute_proprioception_observations()
         self.obs_history[env_ids] = obs_buf[env_ids].repeat(1, self.obs_history_length)
+        # fill extras
         # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
@@ -281,71 +260,79 @@ class LeggedRobotVMC(LeggedRobot):
         # send timeout info to the algorithm
         if self.cfg.env.send_timeouts:
             self.extras["time_outs"] = self.time_out_buf
-
+    
     def compute_proprioception_observations(self):
-        # note that observation noise need to modified accordingly !!!
         obs_buf = torch.cat(
             (
-                # self.base_lin_vel * self.obs_scales.lin_vel,
-                self.base_ang_vel * self.obs_scales.ang_vel,    #三轴角速度 3 
-                self.projected_gravity,                         #重力投影 3 
-                self.commands[:, :3] * self.commands_scale,     #命令 3 lin_vel_x yaw _vel height
-                # (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
-                # self.dof_vel * self.obs_scales.dof_vel,
-                #玺佬模型的6个状态变量
-                self.theta0 * self.obs_scales.dof_pos,          #theta0
-                self.theta0_dot * self.obs_scales.dof_vel,      #theta0_dot
-                self.L0 * self.obs_scales.l0,                   #L0 
-                self.L0_dot * self.obs_scales.l0_dot,           #L0_dot
-                self.dof_pos[:, [2, 5]] * self.obs_scales.dof_pos,  # x   
-                self.dof_vel[:, [2, 5]] * self.obs_scales.dof_vel,   #x_v 
+                self.base_ang_vel * self.obs_scales.ang_vel, #三轴角速度    3
+                self.projected_gravity, #重力投影         3
+                self.commands * self.commands_scale, #命令  3
+                self.theta0 * self.obs_scales.dof_pos,
+                self.theta0_dot * self.obs_scales.dof_vel,
+                self.L0 * self.obs_scales.dof_pos,
+                self.L0_dot * self.obs_scales.dof_vel,
+                self.dof_pos[:,[2,5]] * self.obs_scales.dof_pos,
+                self.dof_vel[:,[2,5]] * self.obs_scales.dof_vel,
                 self.actions,   #6
+                # 3+3+3+1*6+6
             ),
-            dim=-1,
+            dim = -1,
         )
+        #如果不使用VMC
+        # obs_buf = torch.cat(
+        #     (  
+        #         # self.base_lin_vel * self.obs_scales.lin_vel,    #3 需不需要加呢
+        #         self.base_ang_vel  * self.obs_scales.ang_vel,   #3
+        #         self.projected_gravity,                         #3
+        #         self.commands[:, :3] * self.commands_scale,     #3
+        #         (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, #6
+        #         self.dof_vel * self.obs_scales.dof_vel, #6
+        #         self.actions    #6
+        #     ),
+        #     dim=-1
+        # )
         return obs_buf
 
+    #计算观测值
     def compute_observations(self):
-        """Computes observations"""
+        """ Computes observations
+        """
         self.obs_buf = self.compute_proprioception_observations()
 
+        #这里的偏置是什么意思
         if self.cfg.env.num_privileged_obs is not None:
             heights = (
-                torch.clip(
-                    self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights,
+                torch.cat(
+                    self.root_states[:,2].unsqueeze(1) - 0.5 - self.measured_heights,
                     -1.0,
                     1.0,
                 )
-                * self.obs_scales.height_measurements
+                *self.obs_scales.height_measurements
             )
-            self.privileged_obs_buf = torch.cat(
-                (
-                    self.base_lin_vel * self.obs_scales.lin_vel,
-                    self.obs_buf,
-                    self.last_actions[:, :, 0],
-                    self.last_actions[:, :, 1],
-                    self.dof_acc * self.obs_scales.dof_acc,
-                    (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
-                    self.dof_vel * self.obs_scales.dof_vel,
-                    heights,
-                    self.torques * self.obs_scales.torque,
-                    (self.base_mass - self.base_mass.mean()).view(self.num_envs, 1),
-                    self.base_com,
-                    self.default_dof_pos - self.raw_default_dof_pos,
-                    self.friction_coef.view(self.num_envs, 1),
-                    self.restitution_coef.view(self.num_envs, 1),
-                ),
-                dim=-1,
-            )
-
+        self.privileged_obs_buf = torch.cat(
+            (
+                self.base_lin_vel * self.get_observations.lin_vel,
+                self.obs_buf,
+                self.last_actions[:,:,0],
+                self.last_actions[:,:,1],
+                self.dof_acc * self.obs_scales.dof_acc,
+                (self.dof_pos-self.default_dof_pos) * self.obs_scales.dof_pos,
+                self.dof_vel * self.obs_scales.dof_vel,
+                heights,
+                self.torques * self.obs_scales.torque,
+                (self.base_mass -self.base_mass.mean()).view(self.num_envs,1),
+                self.base_com,
+                self.default_dof_pos -self.raw_default_dof_pos,
+                self.friction_coef.view(self.num_envs,1),
+                self.restitution_coef.view(self.num_envs,1),
+            ),
+            dim =-1,
+        )
         # add noise if needed
         if self.add_noise:
-            self.obs_buf += (
-                2 * torch.rand_like(self.obs_buf) - 1
-            ) * self.noise_scale_vec
-
+            self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
         self.obs_history = torch.cat(
-            (self.obs_history[:, self.num_obs :], self.obs_buf), dim=-1
+            (self.obs_history[:,self.num_obs:],self.obs_buf),dim = -1
         )
 
     def _compute_torques(self, actions):
@@ -362,42 +349,50 @@ class LeggedRobotVMC(LeggedRobot):
         theta0_ref = (
             torch.cat(
                 (
-                    (actions[:, 0]).unsqueeze(1),
-                    (actions[:, 3]).unsqueeze(1),
+                    (actions[:,0]).unsqueeze(1),
+                    (actions[:,3]).unsqueeze(1),
                 ),
-                axis=1,
+                axis = 1,
             )
-            * self.cfg.control.action_scale_theta
+            *self.cfg.control.action_scale
         )
+
         l0_ref = (
             torch.cat(
                 (
-                    (actions[:, 1]).unsqueeze(1),
-                    (actions[:, 4]).unsqueeze(1),
+                    (actions[:,1].unsqueeze(1)),
+                    (actions[:,4].unsqueeze(1)),
                 ),
-                axis=1,
-            )
-            * self.cfg.control.action_scale_l0
-        ) + self.cfg.control.l0_offset
+                axis = 1,
+            )*self.cfg.control.action_scale
+        ) + self.cfg.contorl.l0_offset
+
         wheel_vel_ref = (
             torch.cat(
                 (
-                    (actions[:, 2]).unsqueeze(1),
-                    (actions[:, 5]).unsqueeze(1),
+                    (actions[:,2].unsqueeze(1)),
+                    (actions[:,5].unsqueeze(1)),
                 ),
-                axis=1,
+                axis = 1,
             )
-            * self.cfg.control.action_scale_vel
+            *self.cfg.control.action_scale
         )
-
+        #虚拟杆的力矩T
         self.torque_leg = (
-            self.theta_kp * (theta0_ref - self.theta0) - self.theta_kd * self.theta0_dot
+            self.cfg.control.kp_theta * (self.theta0 - theta0_ref) 
+            + self.cfg.control.kd_theta*(self.theta0_dot)
         )
-        self.force_leg = self.l0_kp * (l0_ref - self.L0) - self.l0_kd * self.L0_dot
-        self.torque_wheel = self.d_gains[:, [2, 5]] * (
-            wheel_vel_ref - self.dof_vel[:, [2, 5]]
+        #虚拟杆的力F
+        self.force_leg =(
+            self.cfg.control.kp_l0*(self.L0 - l0_ref)
+            +self.cfg.control.kd_l0*self.L0_dot
         )
-        T1, T2 = self.VMC(
+        #轮子的力矩Tp
+        self.torque_wheel = self.d_gains[:,[2,5]]*(
+            wheel_vel_ref-self.dof_vel[:,2,5]
+        )
+        #进行VMC逆解
+        T1,T2 = self.VMC(
             self.force_leg + self.cfg.control.feedforward_force, self.torque_leg
         )
 
@@ -413,29 +408,66 @@ class LeggedRobotVMC(LeggedRobot):
             axis=1,
         )
 
+        # #如果不用VMC的话，
+        # #大腿电机
+        # l1_ref = (
+        #     torch.cat(
+        #         (
+        #             (actions[:,0].unsqueeze(1)),
+        #             (actions[:,3].unsqueeze(1)),
+        #         ),
+        #         axis = 1,
+        #     ) * self.cfg.control.action_scale            
+        # )
+        # #小腿电机
+        # l2_ref = (
+        #     torch.cat(
+        #         (
+        #             (actions[:,1].unsqueeze(1)),
+        #             (actions[:,4].unsqueeze(1)),
+        #         ),
+        #         axis = 1,
+        #     ) * self.cfg.control.action_scale
+        # )
+        # #轮电机
+        # wheel_vel_ref = (
+        #     torch.cat(
+        #         (
+        #             (actions[:,2].unsqueeze(1)),
+        #             (actions[:,5].unsqueeze(1)),
+        #         ),
+        #         axis = 1,
+        #     )
+        #     *self.cfg.control.action_scale
+        # )
+        # self.l1_torques = self.p_gains * (self.L1 - l1_ref) + self.d_gains*self.l1_dot
+        # self.l2_torques = self.p_gains * (self.L2 - l2_ref) + self.d_gains*self.l2_dot
+        # #轮子的力矩Tp
+        # self.torque_wheel = self.d_gains[:,[2,5]]*(
+        #     wheel_vel_ref-self.dof_vel[:,2,5]
+        # )
+
         return torch.clip(
             torques * self.torques_scale, -self.torque_limits, self.torque_limits
         )
+        
 
-#由于正运动学解算修改，VMC也要作修改
+        # # pd controller
+        # pos_ref = actions * self.cfg.control.pos_action_scale
+        # pos_ref[:, 2] *= 0
+        # pos_ref[:, 5] *= 0
+        # vel_ref = actions * self.cfg.control.vel_action_scale
+        # vel_ref[:, :2] *= 0
+        # vel_ref[:, 3:5] *= 0
+        # torques = self.p_gains * (
+        #     pos_ref + self.default_dof_pos - self.dof_pos
+        # ) + self.d_gains * (vel_ref - self.dof_vel)
+        # return torch.clip(
+        #     torques * self.torques_scale, -self.torque_limits, self.torque_limits
+        
+    
+    #VMC解算
     def VMC(self, F, T):
-        # theta0 = self.theta0 + self.pi / 2
-        # t11 = -self.cfg.asset.l1 * torch.sin(
-        #     theta0 - self.theta1
-        # ) - self.cfg.asset.l2 * torch.sin(self.theta1 + self.theta2 - theta0)
-
-        # t12 = -self.cfg.asset.l1 * torch.cos(
-        #     theta0 - self.theta1
-        # ) + self.cfg.asset.l2 * torch.cos(self.theta1 + self.theta2 - theta0)
-        # t12 = t12 / self.L0
-
-        # t21 = -self.cfg.asset.l2 * torch.sin(self.theta1 + self.theta2 - theta0)
-
-        # t22 = self.cfg.asset.l2 * torch.cos(self.theta1 + self.theta2 - theta0)
-        # t22 = t22 / self.L0
-
-        # T1 = t11 * F + t12 * T
-        # T2 = t21 * F + t22 * T
 
         theta0 = self.theta0 + self.pi / 2
         t11 = -self.cfg.asset.l1 * torch.sin(
@@ -456,8 +488,8 @@ class LeggedRobotVMC(LeggedRobot):
         T2 = t21 * F + t22 * T
 
         return T1, T2
-
-    def _get_noise_scale_vec(self, cfg):
+    
+    def _get_noise_scale_vel(self,cfg):
         """Sets a vector used to scale the noise added to the observations.
             [NOTE]: Must be adapted when changing the observations structure
 
@@ -471,30 +503,12 @@ class LeggedRobotVMC(LeggedRobot):
         self.add_noise = self.cfg.noise.add_noise
         noise_scales = self.cfg.noise.noise_scales
         noise_level = self.cfg.noise.noise_level
-        # noise_vec[:3] = noise_scales.lin_vel * noise_level * self.obs_scales.lin_vel
-        # noise_vec[3 : 3 + 3] = (
-        #     noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
-        # )
-        # noise_vec[3 + 3 : 6 + 3] = noise_scales.gravity * noise_level
-        # noise_vec[6 + 3 : 8 + 3] = 0.0  # commands
-        # noise_vec[8 + 3 : 14 + 3] = (
-        #     noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
-        # )
-        # noise_vec[14 + 3 : 20 + 3] = (
-        #     noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
-        # )
-        # noise_vec[20 + 3 : 26 + 3] = 0.0  # previous actions
-
-
+       
         # noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
         # noise_vec[3:6] = noise_scales.gravity * noise_level
         # noise_vec[6:8] = 0.0  # commands
-        # noise_vec[8:10] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
-        # noise_vec[10:12] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
-        # noise_vec[12:14] = noise_scales.l0 * noise_level * self.obs_scales.l0
-        # noise_vec[14:16] = noise_scales.l0_dot * noise_level * self.obs_scales.l0_dot
-        # noise_vec[16:18] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
-        # noise_vec[18:20] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        # noise_vec[8:14] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        # noise_vec[14:20] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
         # noise_vec[20:26] = 0.0  # previous actions
 
         #和obs_buf对齐
@@ -509,8 +523,6 @@ class LeggedRobotVMC(LeggedRobot):
         noise_vec[14:15] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel  # dof_vel x_v
         noise_vec[15:21] = 0.0  # action
 
-
-        
         if self.cfg.terrain.measure_heights:
             noise_vec[48:235] = (
                 noise_scales.height_measurements
@@ -519,7 +531,6 @@ class LeggedRobotVMC(LeggedRobot):
             )
         return noise_vec
 
-    # ----------------------------------------
     def _init_buffers(self):
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         # get gym GPU state tensors
@@ -531,8 +542,8 @@ class LeggedRobotVMC(LeggedRobot):
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
         # create some wrapper tensors for different slices
-        self.root_states = gymtorch.wrap_tensor(actor_root_state)  #[0:3]机器人xyz位置，[3:7]机器人四元数，[7:10]机器人角速度，[10:13]机器人线速度
-        self.dof_state = gymtorch.wrap_tensor(dof_state_tensor) #(num_envs*num_dof, 2)  # 2表示位置和速度
+        self.root_states = gymtorch.wrap_tensor(actor_root_state)#[0:3]机器人xyz位置，[3:7]机器人四元数，[7:10]机器人角速度，[10:13]机器人线速度
+        self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)#(num_envs*num_dof, 2)  # 2表示位置和速度
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
         self.dof_acc = torch.zeros_like(self.dof_vel)
@@ -630,18 +641,16 @@ class LeggedRobotVMC(LeggedRobot):
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
         self.commands = torch.zeros(
             self.num_envs,
-            self.cfg.commands.num_commands , #3
+            self.cfg.commands.num_commands, #3
             dtype=torch.float,
             device=self.device,
             requires_grad=False,
-        )  # x vel,yaw vel,height
-        #和legged_robot里resamble的命令不同 lin_vel_x, ang_vel_yaw, height
+        )  # lin_vel_x yaw_v height
         self.commands_scale = torch.tensor(
             [
                 self.obs_scales.lin_vel,
                 self.obs_scales.ang_vel,
                 self.obs_scales.height_measurements,
-                # self.obs_scales.heading, #新添加
             ],
             device=self.device,
             requires_grad=False,
@@ -674,17 +683,6 @@ class LeggedRobotVMC(LeggedRobot):
             requires_grad=False,
         )
         self.command_ranges["height"][:] = torch.tensor(self.cfg.commands.ranges.height)
-
-        # self.command_ranges["heading"] = torch.zeros(
-        #     self.num_envs,
-        #     2,
-        #     dtype=torch.float,
-        #     device=self.device,
-        #     requires_grad=False,
-        # )
-
-        # self.command_ranges["heading"][:] = torch.tensor(self.cfg.commands.ranges.heading)
-
         self.feet_air_time = torch.zeros(
             self.num_envs,
             self.feet_indices.shape[0],
@@ -692,7 +690,6 @@ class LeggedRobotVMC(LeggedRobot):
             device=self.device,
             requires_grad=False,
         )
-        
         self.last_contacts = torch.zeros(
             self.num_envs,
             len(self.feet_indices),
@@ -738,7 +735,7 @@ class LeggedRobotVMC(LeggedRobot):
         self.L0 = torch.zeros(
             self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
         )
-        self.L0_dot = torch.zeros(
+        self.theta0 = torch.zeros(
             self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
         )
         self.theta0 = torch.zeros(
@@ -801,18 +798,6 @@ class LeggedRobotVMC(LeggedRobot):
                 self.p_gains.shape,
                 device=self.device,
             )
-            self.theta_kp *= torch_rand_float(
-                p_gains_scale_min,
-                p_gains_scale_max,
-                self.theta_kp.shape,
-                device=self.device,
-            )
-            self.l0_kp *= torch_rand_float(
-                p_gains_scale_min,
-                p_gains_scale_max,
-                self.l0_kp.shape,
-                device=self.device,
-            )
         if self.cfg.domain_rand.randomize_Kd:
             (
                 d_gains_scale_min,
@@ -822,18 +807,6 @@ class LeggedRobotVMC(LeggedRobot):
                 d_gains_scale_min,
                 d_gains_scale_max,
                 self.d_gains.shape,
-                device=self.device,
-            )
-            self.theta_kd *= torch_rand_float(
-                d_gains_scale_min,
-                d_gains_scale_max,
-                self.theta_kd.shape,
-                device=self.device,
-            )
-            self.l0_kd *= torch_rand_float(
-                d_gains_scale_min,
-                d_gains_scale_max,
-                self.l0_kd.shape,
                 device=self.device,
             )
         if self.cfg.domain_rand.randomize_motor_torque:
@@ -864,7 +837,18 @@ class LeggedRobotVMC(LeggedRobot):
                 )
             ).squeeze(-1)
             self.action_delay_idx = action_delay_idx.long()
-
+        
     # ------------ reward functions----------------
 
+    #惩罚两腿夹角防止劈叉
+    def _reward_cooperate_angel(self):
+        return torch.sum(torch.square(self.theta0[:,0] - self.theta0[:,1]))
 
+    # #惩罚转弯时的roll轴偏移
+    # #考虑使用离心力，F = m*v*w 和旋转时角速度成正比
+    # def _reward_orientation_enhance(self):
+    #     return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
+    
+
+    #设计一些中间的奖励函数来引导其完成跳跃
+    # def _reward_robot_jump(self):

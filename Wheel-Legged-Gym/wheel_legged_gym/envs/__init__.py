@@ -32,6 +32,7 @@ from wheel_legged_gym import WHEEL_LEGGED_GYM_ROOT_DIR, WHEEL_LEGGED_GYM_ENVS_DI
 from .base.legged_robot import LeggedRobot
 from .wheel_legged.wheel_legged_config import WheelLeggedCfg, WheelLeggedCfgPPO
 from .wheel_legged_vmc.wheel_legged_vmc import LeggedRobotVMC
+from .bocchi58_wheel_legged import bocchi58_wheel_legged
 from .wheel_legged_vmc.wheel_legged_vmc_config import (
     WheelLeggedVMCCfg,
     WheelLeggedVMCCfgPPO,
@@ -39,6 +40,10 @@ from .wheel_legged_vmc.wheel_legged_vmc_config import (
 from .wheel_legged_vmc_flat.wheel_legged_vmc_flat_config import (
     WheelLeggedVMCFlatCfg,
     WheelLeggedVMCFlatCfgPPO,
+)
+from .bocchi58_wheel_legged.bocchi58_wheel_legged_config import(
+    Bocchi58WheelLeggedCfg,
+    Bocchi58WheelLeggedCfgPPO,
 )
 
 
@@ -57,4 +62,10 @@ task_registry.register(
     LeggedRobotVMC,
     WheelLeggedVMCFlatCfg(),
     WheelLeggedVMCFlatCfgPPO(),
+)
+task_registry.register(
+    "boochi58_wheel_legged",
+    bocchi58_wheel_legged,
+    Bocchi58WheelLeggedCfg(),
+    Bocchi58WheelLeggedCfgPPO(),
 )

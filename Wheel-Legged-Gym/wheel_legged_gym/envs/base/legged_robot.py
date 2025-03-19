@@ -754,7 +754,7 @@ class LeggedRobot(BaseTask):
         self.rigid_body_external_forces[env_ids, 0, 0:3] = quat_rotate(
             self.base_quat[env_ids], rigid_body_external_forces[env_ids]
         )
-        self.rigid_body_external_forces[env_ids, 0, 2] *= 0.5
+        self.rigid_body_external_forces[env_ids, 0, 2] *= 0.5 #在z轴方向的力减小一半，以确保推力只在水平面上作用
 
         self.gym.apply_rigid_body_force_tensors(
             self.sim,

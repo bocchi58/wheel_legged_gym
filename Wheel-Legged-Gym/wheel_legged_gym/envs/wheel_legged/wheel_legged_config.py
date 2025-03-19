@@ -57,7 +57,7 @@ class WheelLeggedCfg(LeggedRobotCfg):
 
 #根据实际参数进行修改
     class asset(LeggedRobotCfg.asset):
-        file = "{WHEEL_LEGGED_GYM_ROOT_DIR}/resources/robots/wl/urdf/wl.urdf"
+        file = "{WHEEL_LEGGED_GYM_ROOT_DIR}/resources/robots/balance/urdf/balance.urdf"
         name = "WheelLegged"
         offset = 0
         l1 = 0.215 

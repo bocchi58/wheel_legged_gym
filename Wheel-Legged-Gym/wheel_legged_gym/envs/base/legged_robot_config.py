@@ -34,7 +34,7 @@ from .base_config import BaseConfig
 class LeggedRobotCfg(BaseConfig):
     class env:
         num_envs = 4096
-        num_observations = 27 #lin_vel(3)+ang_vel(3)+cmd(3)+dof_pos(6)+dof_vel(6)+joint_pos(6)+action(6)
+        num_observations = 27 #lin_vel(3)+ang_vel(3)+cmd(3)+dof_pos(6)+dof_vel(6)+action(6)
         num_privileged_obs = (
             num_observations + 7 * 11 + 3 + 6 * 5 + 3 + 3
         )  # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise
@@ -265,7 +265,7 @@ class LeggedRobotCfgPPO(BaseConfig):
 
     class policy:
         init_noise_std = 0.5
-        actor_hidden_dims = [128, 64, 32]
+        actor__dims = [128, 64, 32]
         critic_hidden_dims = [256, 128, 64]
         activation = "elu"  # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
 
