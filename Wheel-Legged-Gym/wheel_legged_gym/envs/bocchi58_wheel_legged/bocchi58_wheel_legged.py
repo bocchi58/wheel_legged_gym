@@ -841,8 +841,11 @@ class Bocchi58WheelLegged(LeggedRobot):
     # ------------ reward functions----------------
 
     #惩罚两腿夹角防止劈叉
-    def _reward_cooperate_angel(self):
+    def _reward_spilts(self):
         return torch.sum(torch.square(self.theta0[:,0] - self.theta0[:,1]))
+
+    # def _rewrd_control_theta(self):
+    #     return torch.
 
     # #惩罚转弯时的roll轴偏移
     # #考虑使用离心力，F = m*v*w 和旋转时角速度成正比

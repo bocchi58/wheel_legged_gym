@@ -5,7 +5,7 @@ from wheel_legged_gym.envs.base.legged_robot_config import (
 
 class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
     class env(LeggedRobotCfg.env):
-        num_observations = 21 #lin_vel(3)+ang_vel(3)+cmd(3)+6个状态量+action(6)
+        num_observations = 27 #lin_vel(3)+ang_vel(3)+cmd(3)+dof_pos(6)+dof_vel(6)+action(6)
         num_privileged_obs = (
             LeggedRobotCfg.env.num_envs+ 7 * 11 + 3 + 6 * 7 + 3 + 3
         )
@@ -72,21 +72,76 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
         terminate_after_contacts_on = ["base"]
         self_collisions = 1  # 1 to disable, 0 to enable...bitwise filter
         flip_visual_attachments = False
+    #命令
+    class commands:
+        curriculum = True
+        basic_max_curriculum = 2.5
+        advanced_max_curriculum = 1.5
+        curriculum_threshold = 0.7
+        num_commands = 3  # lin_vel_x,, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
+        resampling_time = 5.0  # time before command are changed[s]
+        heading_command = True  # if true: compute ang vel command from heading error
+
+        class ranges:
+            #在课程学习里还会进一步修改
+            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
+            ang_vel_yaw = [-3.14, 3.14]  # min max [rad/s]
+            height = [0.25, 0.45]
+            heading = [-3.14, 3.14]
+
+    class rewards:
+        class scales:
+            tracking_lin_vel = 1.0
+            tracking_lin_vel_enhance = 1.0
+            tracking_ang_vel = 1.0
+
+            base_height = 1.0
+            nominal_state = -0.1
+            lin_vel_z = -2.0
+            ang_vel_xy = -0.05  
+            orientation = -20.0  #姿态控制，主要是控制roll轴，保持roll轴为0
+
+            dof_vel = -5e-5
+            dof_acc = -2.5e-7
+            torques = -0.0001
+            action_rate = -0.01
+            action_smooth = -0.01
+
+            collision = -1.0
+            dof_pos_limits = -1.0
+
+            spilts = -1.0 #防止劈叉
+            control_theta = -1.0 #控制theta角度尽量为0
+
+
+        only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
+        clip_single_reward = 1
+        tracking_sigma = 0.25  # tracking reward = exp(-error^2/sigma)
+        soft_dof_pos_limit = (
+            0.97  # percentage of urdf limits, values above this limit are penalized
+        )
+        soft_dof_vel_limit = 1.0
+        soft_torque_limit = 1.0
+        base_height_target = 0.18
+        max_contact_force = 100.0  # forces above this value are penalized
+
     #训练策略
 class Bocchi58WheelLeggedCfgPPO(LeggedRobotCfgPPO):
     class policy:
-        init_noise_std = 0.5
+        #代表的是探索能力
+        # init_noise_std = 0.5
+        init_noise_std = 1
+        #网络大小尽量不要超过以下部分，否则将很难在32上面部署
         actor__dims = [128, 64, 32]
         critic_hidden_dims = [128, 64, 32]
-        activation = "elu"  # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
-
+        encoder_hidden_dims = [64, 16]
+        #这里改成使用"lrelu""
+        activation = "lrelu"  # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
         # only for ActorCriticSequence
         num_encoder_obs = (
             LeggedRobotCfg.env.obs_history_length * LeggedRobotCfg.env.num_observations
         )
         latent_dim = 10  # at least 3 to estimate base linear velocity
-        encoder_hidden_dims = [64, 16]
-
 
     class algorithm(LeggedRobotCfgPPO.algorithm):
         kl_decay = (
