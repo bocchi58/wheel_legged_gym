@@ -13,14 +13,15 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
     class init_state(LeggedRobotCfg.init_state):
         pos = [0,0,0.25] #x,y,z [m]
         default_joint_angles = { # target angles when action = 0.0
-            "lf0_Joint": 0.1,
-            "lf1_Joint": -0.98,
-            "l_wheel_Joint": 0.0,
-            "rf0_Joint": -0.1,
-            "rf1_Joint": 0.98,
-            "r_wheel_Joint": 0.0,
+            "lf0_joint": 0.1,
+            "lf1_joint": -0.98,
+            "l_wheel_joint": 0.0,
+            "rf0_joint": -0.1,
+            "rf1_joint": 0.98,
+            "rwheel_joint": 0.0,
         }
     #缩放因子scale,需不需要修改，有什么作用
+    #应该是为了归一化用的，一般不需要修改
     class control(LeggedRobotCfg.control):
         #这里的scale是什么意思
         pos_action_scale = 0.5
@@ -37,8 +38,8 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
 
         #什么含义，需要修改吗
         # PD Drive parameters:
-        stiffness = {"f0":40.0,"f1":40.0,"wheel":0}  # [N*m/rad]
-        damping = damping = {"f0": 1.0, "f1": 1.0, "wheel": 0.5}  # [N*m*s/rad]
+        stiffness = {"f0":40.0,"f1":40.0,"wheel":0}  # [N*m/rad]                        #刚度 P
+        damping = damping = {"f0": 1.0, "f1": 1.0, "wheel": 0.5}  # [N*m*s/rad]         #阻尼 D
         # decimation: Number of control action updates @ sim DT per policy DT
         decimation = 2
     class normalization(LeggedRobotCfg.normalization):
@@ -78,7 +79,7 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
         basic_max_curriculum = 2.5
         advanced_max_curriculum = 1.5
         curriculum_threshold = 0.7
-        num_commands = 3  # lin_vel_x,, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
+        num_commands = 3  # lin_vel_x,, ang_vel_yaw, height,heading (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 5.0  # time before command are changed[s]
         heading_command = True  # if true: compute ang vel command from heading error
 
@@ -150,4 +151,4 @@ class Bocchi58WheelLeggedCfgPPO(LeggedRobotCfgPPO):
 
     class runner(LeggedRobotCfgPPO.runner):
         # logging
-        experiment_name = "boochi58_wheel_legged"
+        experiment_name = "bocchi58_wheel_legged"

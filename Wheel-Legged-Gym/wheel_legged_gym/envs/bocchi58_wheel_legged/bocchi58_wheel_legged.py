@@ -93,6 +93,22 @@ class Bocchi58WheelLegged(LeggedRobot):
             self.compute_dof_vel()
         self.post_physics_step()
 
+        # return clipped obs, clipped states (None), rewards, dones and infos
+        clip_obs = self.cfg.normalization.clip_observations
+        self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+        if self.privileged_obs_buf is not None:
+            self.privileged_obs_buf = torch.clip(
+                self.privileged_obs_buf, -clip_obs, clip_obs
+            )
+        return (
+            self.obs_buf,
+            self.privileged_obs_buf,
+            self.rew_buf,
+            self.reset_buf,
+            self.extras,
+            self.obs_history,
+        )
+
     #检查回合是否结束 计算观测值和奖励
     def post_physics_step(self):
         """check terminations, compute observations and rewards
@@ -262,35 +278,35 @@ class Bocchi58WheelLegged(LeggedRobot):
             self.extras["time_outs"] = self.time_out_buf
     
     def compute_proprioception_observations(self):
-        obs_buf = torch.cat(
-            (
-                self.base_ang_vel * self.obs_scales.ang_vel, #三轴角速度    3
-                self.projected_gravity, #重力投影         3
-                self.commands * self.commands_scale, #命令  3
-                self.theta0 * self.obs_scales.dof_pos,
-                self.theta0_dot * self.obs_scales.dof_vel,
-                self.L0 * self.obs_scales.dof_pos,
-                self.L0_dot * self.obs_scales.dof_vel,
-                self.dof_pos[:,[2,5]] * self.obs_scales.dof_pos,
-                self.dof_vel[:,[2,5]] * self.obs_scales.dof_vel,
-                self.actions,   #6
-                # 3+3+3+1*6+6
-            ),
-            dim = -1,
-        )
-        #如果不使用VMC
         # obs_buf = torch.cat(
-        #     (  
-        #         # self.base_lin_vel * self.obs_scales.lin_vel,    #3 需不需要加呢
-        #         self.base_ang_vel  * self.obs_scales.ang_vel,   #3
-        #         self.projected_gravity,                         #3
-        #         self.commands[:, :3] * self.commands_scale,     #3
-        #         (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, #6
-        #         self.dof_vel * self.obs_scales.dof_vel, #6
-        #         self.actions    #6
+        #     (
+        #         self.base_ang_vel * self.obs_scales.ang_vel, #三轴角速度    3
+        #         self.projected_gravity, #重力投影         3
+        #         self.commands * self.commands_scale, #命令  3
+        #         self.theta0 * self.obs_scales.dof_pos,
+        #         self.theta0_dot * self.obs_scales.dof_vel,
+        #         self.L0 * self.obs_scales.dof_pos,
+        #         self.L0_dot * self.obs_scales.dof_vel,
+        #         self.dof_pos[:,[2,5]] * self.obs_scales.dof_pos,
+        #         self.dof_vel[:,[2,5]] * self.obs_scales.dof_vel,
+        #         self.actions,   #6
+        #         # 3+3+3+1*6+6
         #     ),
-        #     dim=-1
+        #     dim = -1,
         # )
+        # 如果不使用VMC
+        obs_buf = torch.cat(
+            (  
+                # self.base_lin_vel * self.obs_scales.lin_vel,    #3 需不需要加呢
+                self.base_ang_vel  * self.obs_scales.ang_vel,   #3
+                self.projected_gravity,                         #3
+                self.commands[:, :3] * self.commands_scale,     #3
+                (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, #6
+                self.dof_vel * self.obs_scales.dof_vel, #6
+                self.actions    #6
+            ),
+            dim=-1
+        )
         return obs_buf
 
     #计算观测值
@@ -303,7 +319,7 @@ class Bocchi58WheelLegged(LeggedRobot):
         if self.cfg.env.num_privileged_obs is not None:
             heights = (
                 torch.cat(
-                    self.root_states[:,2].unsqueeze(1) - 0.5 - self.measured_heights,
+                    self.root_states[:,2].unsqueeze(1) - 0.5 - self.measured_heights,   #measured_heights是地形的测量高度
                     -1.0,
                     1.0,
                 )
@@ -346,90 +362,27 @@ class Bocchi58WheelLegged(LeggedRobot):
         Returns:
             [torch.Tensor]: Torques sent to the simulation
         """
-        theta0_ref = (
-            torch.cat(
-                (
-                    (actions[:,0]).unsqueeze(1),
-                    (actions[:,3]).unsqueeze(1),
-                ),
-                axis = 1,
-            )
-            *self.cfg.control.action_scale
-        )
-
-        l0_ref = (
-            torch.cat(
-                (
-                    (actions[:,1].unsqueeze(1)),
-                    (actions[:,4].unsqueeze(1)),
-                ),
-                axis = 1,
-            )*self.cfg.control.action_scale
-        ) + self.cfg.contorl.l0_offset
-
-        wheel_vel_ref = (
-            torch.cat(
-                (
-                    (actions[:,2].unsqueeze(1)),
-                    (actions[:,5].unsqueeze(1)),
-                ),
-                axis = 1,
-            )
-            *self.cfg.control.action_scale
-        )
-        #虚拟杆的力矩T
-        self.torque_leg = (
-            self.cfg.control.kp_theta * (self.theta0 - theta0_ref) 
-            + self.cfg.control.kd_theta*(self.theta0_dot)
-        )
-        #虚拟杆的力F
-        self.force_leg =(
-            self.cfg.control.kp_l0*(self.L0 - l0_ref)
-            +self.cfg.control.kd_l0*self.L0_dot
-        )
-        #轮子的力矩Tp
-        self.torque_wheel = self.d_gains[:,[2,5]]*(
-            wheel_vel_ref-self.dof_vel[:,2,5]
-        )
-        #进行VMC逆解
-        T1,T2 = self.VMC(
-            self.force_leg + self.cfg.control.feedforward_force, self.torque_leg
-        )
-
-        torques = torch.cat(
-            (
-                T1[:, 0].unsqueeze(1),
-                T2[:, 0].unsqueeze(1),
-                self.torque_wheel[:, 0].unsqueeze(1),
-                -T1[:, 1].unsqueeze(1),
-                -T2[:, 1].unsqueeze(1),
-                self.torque_wheel[:, 1].unsqueeze(1),
-            ),
-            axis=1,
-        )
-
-        # #如果不用VMC的话，
-        # #大腿电机
-        # l1_ref = (
+        # theta0_ref = (
         #     torch.cat(
         #         (
-        #             (actions[:,0].unsqueeze(1)),
-        #             (actions[:,3].unsqueeze(1)),
+        #             (actions[:,0]).unsqueeze(1),
+        #             (actions[:,3]).unsqueeze(1),
         #         ),
         #         axis = 1,
-        #     ) * self.cfg.control.action_scale            
+        #     )
+        #     *self.cfg.control.action_scale
         # )
-        # #小腿电机
-        # l2_ref = (
+
+        # l0_ref = (
         #     torch.cat(
         #         (
         #             (actions[:,1].unsqueeze(1)),
         #             (actions[:,4].unsqueeze(1)),
         #         ),
         #         axis = 1,
-        #     ) * self.cfg.control.action_scale
-        # )
-        # #轮电机
+        #     )*self.cfg.control.action_scale
+        # ) + self.cfg.contorl.l0_offset
+
         # wheel_vel_ref = (
         #     torch.cat(
         #         (
@@ -440,33 +393,96 @@ class Bocchi58WheelLegged(LeggedRobot):
         #     )
         #     *self.cfg.control.action_scale
         # )
-        # self.l1_torques = self.p_gains * (self.L1 - l1_ref) + self.d_gains*self.l1_dot
-        # self.l2_torques = self.p_gains * (self.L2 - l2_ref) + self.d_gains*self.l2_dot
+        # #虚拟杆的力矩T
+        # self.torque_leg = (
+        #     self.cfg.control.kp_theta * (self.theta0 - theta0_ref) 
+        #     + self.cfg.control.kd_theta*(self.theta0_dot)
+        # )
+        # #虚拟杆的力F
+        # self.force_leg =(
+        #     self.cfg.control.kp_l0*(self.L0 - l0_ref)
+        #     +self.cfg.control.kd_l0*self.L0_dot
+        # )
         # #轮子的力矩Tp
         # self.torque_wheel = self.d_gains[:,[2,5]]*(
         #     wheel_vel_ref-self.dof_vel[:,2,5]
         # )
+        # #进行VMC逆解
+        # T1,T2 = self.VMC(
+        #     self.force_leg + self.cfg.control.feedforward_force, self.torque_leg
+        # )
+
+        # torques = torch.cat(
+        #     (
+        #         T1[:, 0].unsqueeze(1),
+        #         T2[:, 0].unsqueeze(1),
+        #         self.torque_wheel[:, 0].unsqueeze(1),
+        #         -T1[:, 1].unsqueeze(1),
+        #         -T2[:, 1].unsqueeze(1),
+        #         self.torque_wheel[:, 1].unsqueeze(1),
+        #     ),
+        #     axis=1,
+        # )
+
+        #如果不用VMC的话，
+        #大腿电机
+        theta1_ref = (
+            torch.cat(
+                (
+                    (actions[:,0].unsqueeze(1)),
+                    (actions[:,3].unsqueeze(1)),
+                ),
+                axis = 1,
+            ) * self.cfg.control.action_scale            
+        )
+        #小腿电机
+        theta2_ref = (
+            torch.cat(
+                (
+                    (actions[:,1].unsqueeze(1)),
+                    (actions[:,4].unsqueeze(1)),
+                ),
+                axis = 1,
+            ) * self.cfg.control.action_scale
+        )
+        #轮电机
+        wheel_vel_ref = (
+            torch.cat(
+                (
+                    (actions[:,2].unsqueeze(1)),
+                    (actions[:,5].unsqueeze(1)),
+                ),
+                axis = 1,
+            )
+            *self.cfg.control.action_scale
+        )
+        #大腿电机的力矩
+        self.l1_torques = self.p_gains * (self.theta1 - theta1_ref) + self.d_gains*self.theta1_dot
+        #小腿电机的力矩
+        self.l2_torques = self.p_gains * (self.theta2 - theta2_ref) + self.d_gains*self.theta2_dot
+        #轮子的力矩Tp
+        self.torque_wheel = self.d_gains[:,[2,5]]*(
+            wheel_vel_ref-self.dof_vel[:,2,5]
+        )
+
+        torques = torch.cat(
+            (
+                self.l1_torques[:, 0].unsqueeze(1),
+                self.l2_torques[:, 0].unsqueeze(1),
+                self.torque_wheel[:, 0].unsqueeze(1),
+                -self.l1_torques[:, 1].unsqueeze(1),
+                -self.l2_torques[:, 1].unsqueeze(1),
+                self.torque_wheel[:, 1].unsqueeze(1),
+            ),
+            axis=1,
+        )
 
         return torch.clip(
             torques * self.torques_scale, -self.torque_limits, self.torque_limits
         )
-        
-
-        # # pd controller
-        # pos_ref = actions * self.cfg.control.pos_action_scale
-        # pos_ref[:, 2] *= 0
-        # pos_ref[:, 5] *= 0
-        # vel_ref = actions * self.cfg.control.vel_action_scale
-        # vel_ref[:, :2] *= 0
-        # vel_ref[:, 3:5] *= 0
-        # torques = self.p_gains * (
-        #     pos_ref + self.default_dof_pos - self.dof_pos
-        # ) + self.d_gains * (vel_ref - self.dof_vel)
-        # return torch.clip(
-        #     torques * self.torques_scale, -self.torque_limits, self.torque_limits
-        
     
     #VMC解算
+    #其实没必要用，因为模型输出的是关节的位置和速度，没必要再经过VMC
     def VMC(self, F, T):
 
         theta0 = self.theta0 + self.pi / 2
@@ -512,16 +528,22 @@ class Bocchi58WheelLegged(LeggedRobot):
         # noise_vec[20:26] = 0.0  # previous actions
 
         #和obs_buf对齐
-        noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel  # 角速度
-        noise_vec[3:6] = noise_scales.gravity * noise_level  # 重力投影
-        noise_vec[6:9] = 0.0  # 命令
-        noise_vec[9:10] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos  # theta0
-        noise_vec[10:11] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel  # theta0_dot
-        noise_vec[11:12] = noise_scales.l0 * noise_level * self.obs_scales.l0  # L0
-        noise_vec[12:13] = noise_scales.l0_dot * noise_level * self.obs_scales.l0_dot  # L0_dot
-        noise_vec[13:14] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos  # dof_pos x
-        noise_vec[14:15] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel  # dof_vel x_v
-        noise_vec[15:21] = 0.0  # action
+        # noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel  # 角速度
+        # noise_vec[3:6] = noise_scales.gravity * noise_level  # 重力投影
+        # noise_vec[6:9] = 0.0  # 命令
+        # noise_vec[9:10] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos  # theta0
+        # noise_vec[10:11] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel  # theta0_dot
+        # noise_vec[11:12] = noise_scales.l0 * noise_level * self.obs_scales.l0  # L0
+        # noise_vec[12:13] = noise_scales.l0_dot * noise_level * self.obs_scales.l0_dot  # L0_dot
+        # noise_vec[13:14] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos  # dof_pos x
+        # noise_vec[14:15] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel  # dof_vel x_v
+        # noise_vec[15:21] = 0.0  # action
+        noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
+        noise_vec[3:6] = noise_scales.gravity * noise_level
+        noise_vec[6:8] = 0.0  # commands
+        noise_vec[8:14] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        noise_vec[14:20] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        noise_vec[20:26] = 0.0  # previous actions
 
         if self.cfg.terrain.measure_heights:
             noise_vec[48:235] = (
@@ -641,11 +663,11 @@ class Bocchi58WheelLegged(LeggedRobot):
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
         self.commands = torch.zeros(
             self.num_envs,
-            self.cfg.commands.num_commands, #3
+            self.cfg.commands.num_commands + 1, #4
             dtype=torch.float,
             device=self.device,
             requires_grad=False,
-        )  # lin_vel_x yaw_v height
+        )  # lin_vel_x yaw_v height heading
         self.commands_scale = torch.tensor(
             [
                 self.obs_scales.lin_vel,
@@ -748,6 +770,12 @@ class Bocchi58WheelLegged(LeggedRobot):
             self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
         )
         self.theta2 = torch.zeros(
+            self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
+        )
+        self.theta1_dot = torch.zeros(
+            self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
+        )
+        self.theta2_dot = torch.zeros(
             self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
         )
 
