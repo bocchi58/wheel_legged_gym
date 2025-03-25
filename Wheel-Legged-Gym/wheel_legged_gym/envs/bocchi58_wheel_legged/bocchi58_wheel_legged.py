@@ -297,10 +297,10 @@ class Bocchi58WheelLegged(LeggedRobot):
         # 如果不使用VMC
         obs_buf = torch.cat(
             (  
-                # self.base_lin_vel * self.obs_scales.lin_vel,    #3 需不需要加呢
+                # self.base_lin_vel * self.obs_scales.lin_vel,    #3 不需要加
                 self.base_ang_vel  * self.obs_scales.ang_vel,   #3
                 self.projected_gravity,                         #3
-                self.commands[:, :3] * self.commands_scale,     #3
+                self.commands[:, :3] * self.commands_scale,     #3  这里需要观测heading和jump吗 玺佬是没有观测heading，不过进行了resample,那这里也不观测jump，只进行抽样
                 (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, #6
                 self.dof_vel * self.obs_scales.dof_vel, #6
                 self.actions    #6
@@ -540,10 +540,10 @@ class Bocchi58WheelLegged(LeggedRobot):
         # noise_vec[15:21] = 0.0  # action
         noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
         noise_vec[3:6] = noise_scales.gravity * noise_level
-        noise_vec[6:8] = 0.0  # commands
-        noise_vec[8:14] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
-        noise_vec[14:20] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
-        noise_vec[20:26] = 0.0  # previous actions
+        noise_vec[6:9] = 0.0  # commands
+        noise_vec[9:15] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        noise_vec[15:21] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        noise_vec[21:27] = 0.0  # previous actions
 
         if self.cfg.terrain.measure_heights:
             noise_vec[48:235] = (
@@ -663,7 +663,7 @@ class Bocchi58WheelLegged(LeggedRobot):
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
         self.commands = torch.zeros(
             self.num_envs,
-            self.cfg.commands.num_commands + 1, #4
+            self.cfg.commands.num_commands+1, #4
             dtype=torch.float,
             device=self.device,
             requires_grad=False,

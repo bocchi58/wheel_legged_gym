@@ -115,6 +115,11 @@ class LeggedRobot(BaseTask):
             self.compute_dof_vel()
         self.post_physics_step()
 
+        #处理跳跃命令
+        jump_envs = self.commands[:,4] > 0.5 #假设跳跃命令大于0.5就起跳
+        if torch.any(jump_envs):
+            self.execute_junmp(jump_envs)
+
         # return clipped obs, clipped states (None), rewards, dones and infos
         clip_obs = self.cfg.normalization.clip_observations
         self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
@@ -654,6 +659,16 @@ class LeggedRobot(BaseTask):
                 (len(env_ids), 1),
                 device=self.device,
             ).squeeze(1)
+        #增加跳跃抽样命令
+        self.commands[env_ids,4] = (
+            self.command_ranges["jump"][env_ids,1]
+            - self.command_ranges["jump"][env_ids,0]
+        ) * torch.rand(len(env_ids),devicde=self.device)+self.command_ranges[
+            "jump"
+        ][
+            env_ids,0
+        ]
+        
 
     def _compute_torques(self, actions):
         """Compute torques from actions.

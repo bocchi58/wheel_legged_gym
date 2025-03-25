@@ -34,7 +34,7 @@ import os
 import isaacgym
 from isaacgym.torch_utils import *
 from wheel_legged_gym.envs import *
-from wheel_legged_gym.utils import get_args, export_policy_as_jit, task_registry, Logger
+from wheel_legged_gym.utils import get_args, export_policy_as_jit, task_registry, Logger ,export_policy_as_onnx,get_load_path
 from isaacgym import gymapi
 
 import numpy as np
@@ -96,6 +96,7 @@ def play(args):
             "policies",
         )
         export_policy_as_jit(ppo_runner.alg.actor_critic, path)
+        export_policy_as_onnx(ppo_runner.alg.actor_critic, path) #将模型导出为onnx模型以便后续部署
         print("Exported policy as jit script to: ", path)
 
     logger = Logger(env.dt)
@@ -133,9 +134,9 @@ def play(args):
             elif evt.action == "turn_right" and evt.value > 0:
                 env.commands[:, 1] = -3.14  # Clockwise rotation
             elif evt.action == "increase_height" and evt.value > 0:
-                env.commands[:, 2] += 0.01  # Increase leg length
+                env.commands[:, 2] += 0.005  # Increase leg length
             elif evt.action == "decrease_height" and evt.value > 0:
-                env.commands[:, 2] -= 0.01  # Decrease leg length
+                env.commands[:, 2] -= 0.005  # Decrease leg length
 
         if ppo_runner.alg.actor_critic.is_sequence:
             actions, latent = policy(obs, obs_history)

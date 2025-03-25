@@ -38,8 +38,8 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
 
         #什么含义，需要修改吗
         # PD Drive parameters:
-        stiffness = {"f0":40.0,"f1":40.0,"wheel":0}  # [N*m/rad]                        #刚度 P
-        damping = damping = {"f0": 1.0, "f1": 1.0, "wheel": 0.5}  # [N*m*s/rad]         #阻尼 D
+        stiffness = {"f0":20.0,"f1":20.0,"wheel":0}  # [N*m/rad]                        #刚度 P
+        damping = damping = {"f0": 1.0, "f1": 1.0, "wheel": 0.1}  # [N*m*s/rad]         #阻尼 D
         # decimation: Number of control action updates @ sim DT per policy DT
         decimation = 2
     class normalization(LeggedRobotCfg.normalization):
@@ -63,6 +63,28 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
             l0 = 0.02
             l0_dot = 0.1
 
+    class sim:
+        dt = 0.005 #控制频率为200hz
+        substeps = 1
+        gravity = [0.0, 0.0, -9.81]  # [m/s^2]
+        up_axis = 1  # 0 is y, 1 is z
+
+        class physx:
+            num_threads = 10
+            solver_type = 1  # 0: pgs, 1: tgs
+            num_position_iterations = 4
+            num_velocity_iterations = 0
+            contact_offset = 0.01  # [m]
+            rest_offset = 0.0  # [m]
+            bounce_threshold_velocity = 0.5  # 0.5 [m/s]
+            max_depenetration_velocity = 1.0
+            max_gpu_contact_pairs = 2**23  # 2**24 -> needed for 8000 envs and more
+            default_buffer_size_multiplier = 5
+            contact_collection = (
+                2  # 0: never, 1: last sub-step, 2: all sub-steps (default=2)
+            )
+
+
     class asset(LeggedRobotCfg.asset):
         file = "{WHEEL_LEGGED_GYM_ROOT_DIR}/resources/robots/balance/urdf/balance.urdf"
         name = "WheelLegged"
@@ -79,7 +101,7 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
         basic_max_curriculum = 2.5
         advanced_max_curriculum = 1.5
         curriculum_threshold = 0.7
-        num_commands = 3  # lin_vel_x,, ang_vel_yaw, height,heading (in heading mode ang_vel_yaw is recomputed from heading error)
+        num_commands = 3  # lin_vel_x,, ang_vel_yaw, height,heading (in heading mode ang_vel_yaw is recomputed from heading error) jump
         resampling_time = 5.0  # time before command are changed[s]
         heading_command = True  # if true: compute ang vel command from heading error
 
@@ -89,6 +111,8 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
             ang_vel_yaw = [-3.14, 3.14]  # min max [rad/s]
             height = [0.25, 0.45]
             heading = [-3.14, 3.14]
+            #增加跳跃
+            # jump = [0,1.0]
 
     class rewards:
         class scales:
