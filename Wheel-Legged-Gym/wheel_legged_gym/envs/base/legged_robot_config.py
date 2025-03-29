@@ -34,7 +34,7 @@ from .base_config import BaseConfig
 class LeggedRobotCfg(BaseConfig):
     class env:
         num_envs = 4096
-        num_observations = 27 #lin_vel(3)+ang_vel(3)+cmd(3)+dof_pos(6)+dof_vel(6)+action(6)
+        num_observations = 27
         num_privileged_obs = (
             num_observations + 7 * 11 + 3 + 6 * 5 + 3 + 3
         )  # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise
@@ -96,9 +96,9 @@ class LeggedRobotCfg(BaseConfig):
         heading_command = True  # if true: compute ang vel command from heading error
 
         class ranges:
-            lin_vel_x = [-2.5, 2.5]  # min max [m/s]
+            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
             ang_vel_yaw = [-3.14, 3.14]  # min max [rad/s]
-            height = [0.25, 0.45]
+            height = [0.1, 0.25]
             heading = [-3.14, 3.14]
 
     class init_state:
@@ -161,7 +161,7 @@ class LeggedRobotCfg(BaseConfig):
         rand_com_vec = [0.05, 0.05, 0.05]
         push_robots = True
         push_interval_s = 7
-        max_push_vel_xy = 2.5
+        max_push_vel_xy = 2.0
         randomize_Kp = True
         randomize_Kp_range = [0.9, 1.1]
         randomize_Kd = True
@@ -176,14 +176,14 @@ class LeggedRobotCfg(BaseConfig):
     class rewards:
         class scales:
             tracking_lin_vel = 1.0
-            tracking_lin_vel_enhance = 1.0
+            tracking_lin_vel_enhance = 1
             tracking_ang_vel = 1.0
 
             base_height = 1.0
             nominal_state = -0.1
             lin_vel_z = -2.0
-            ang_vel_xy = -0.05  
-            orientation = -20.0  #姿态控制，主要是控制roll轴，保持roll轴为0
+            ang_vel_xy = -0.05
+            orientation = -10.0
 
             dof_vel = -5e-5
             dof_acc = -2.5e-7
@@ -193,7 +193,6 @@ class LeggedRobotCfg(BaseConfig):
 
             collision = -1.0
             dof_pos_limits = -1.0
-
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_single_reward = 1
@@ -265,7 +264,7 @@ class LeggedRobotCfgPPO(BaseConfig):
 
     class policy:
         init_noise_std = 0.5
-        actor__dims = [128, 64, 32]
+        actor_hidden_dims = [128, 64, 32]
         critic_hidden_dims = [256, 128, 64]
         activation = "elu"  # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
 

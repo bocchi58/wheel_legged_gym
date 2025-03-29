@@ -115,11 +115,6 @@ class LeggedRobot(BaseTask):
             self.compute_dof_vel()
         self.post_physics_step()
 
-        #处理跳跃命令
-        jump_envs = self.commands[:,4] > 0.5 #假设跳跃命令大于0.5就起跳
-        if torch.any(jump_envs):
-            self.execute_junmp(jump_envs)
-
         # return clipped obs, clipped states (None), rewards, dones and infos
         clip_obs = self.cfg.normalization.clip_observations
         self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
@@ -659,16 +654,6 @@ class LeggedRobot(BaseTask):
                 (len(env_ids), 1),
                 device=self.device,
             ).squeeze(1)
-        #增加跳跃抽样命令
-        self.commands[env_ids,4] = (
-            self.command_ranges["jump"][env_ids,1]
-            - self.command_ranges["jump"][env_ids,0]
-        ) * torch.rand(len(env_ids),devicde=self.device)+self.command_ranges[
-            "jump"
-        ][
-            env_ids,0
-        ]
-        
 
     def _compute_torques(self, actions):
         """Compute torques from actions.
@@ -769,7 +754,7 @@ class LeggedRobot(BaseTask):
         self.rigid_body_external_forces[env_ids, 0, 0:3] = quat_rotate(
             self.base_quat[env_ids], rigid_body_external_forces[env_ids]
         )
-        self.rigid_body_external_forces[env_ids, 0, 2] *= 0.5 #在z轴方向的力减小一半，以确保推力只在水平面上作用
+        self.rigid_body_external_forces[env_ids, 0, 2] *= 0.5
 
         self.gym.apply_rigid_body_force_tensors(
             self.sim,
@@ -1642,20 +1627,18 @@ class LeggedRobot(BaseTask):
         self.rwd_angVelTrackPrev = self._reward_tracking_ang_vel()
 
     # ------------ reward functions----------------
-    #如果使用要去config文件的reward_scales中设置相应的值，否则默认为0
-    #惩罚z轴线速度
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
         return torch.square(self.base_lin_vel[:, 2])
-    #惩罚xy平面的角速度，使其尽可能平滑
+
     def _reward_ang_vel_xy(self):
         # Penalize xy axes base angular velocity
         return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
-    #惩罚不正确的姿态，鼓励机器人保持平稳的姿态，控制roll轴为0,roll轴效果不好可以考虑增大这部分的惩罚比例
+
     def _reward_orientation(self):
         # Penalize non flat base orientation
         return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
-    #惩罚机器人离地面的高度，鼓励机器人保持在一个高度
+
     def _reward_base_height(self):
         # Penalize base height away from target
         # print(self.commands[0, 2], self.base_height[0])
@@ -1664,34 +1647,33 @@ class LeggedRobot(BaseTask):
         else:
             base_height_error = torch.square(self.base_height - self.commands[:, 2])
             return torch.exp(-base_height_error / 0.001)
-    
+
     def _reward_base_height_enhance(self):
         base_height_error = torch.square(self.base_height - self.commands[:, 2])
         return torch.exp(-base_height_error / 0.001 / 10) - 1
-    #惩罚机器人的输出扭矩，鼓励更少的输出
+
     def _reward_torques(self):
         # Penalize torques
         return torch.sum(torch.square(self.torques), dim=1)
-    #惩罚功率
+
     def _reward_power(self):
         # Penalize torques
         return torch.sum(torch.abs(self.torques * self.dof_vel), dim=1)
-    #惩罚关节速度
+
     def _reward_dof_vel(self):
         # Penalize dof velocities
         return torch.sum(torch.square(self.dof_vel[:, :2]), dim=1) + torch.sum(
             torch.square(self.dof_vel[:, 3:5]), dim=1
         )
-    #惩罚关节加速度
+
     def _reward_dof_acc(self):
         # Penalize dof accelerations
         return torch.sum(torch.square(self.dof_acc), dim=1)
-    #惩罚动作变化率，鼓励平滑的变化
+
     def _reward_action_rate(self):
         # Penalize changes in actions
         return torch.sum(torch.square(self.last_actions[:, :, 0] - self.actions), dim=1)
 
-    #
     def _reward_action_smooth(self):
         # Penalize changes in actions
         return torch.sum(
@@ -1709,7 +1691,7 @@ class LeggedRobot(BaseTask):
             ),
             dim=1,
         )
-    #惩罚碰撞 lf rf base
+
     def _reward_collision(self):
         # Penalize collisions on selected bodies
         return torch.sum(
@@ -1723,7 +1705,6 @@ class LeggedRobot(BaseTask):
             dim=1,
         )
 
-    #当机器人需要重置且未终止时
     def _reward_termination(self):
         # Terminal reward / penalty
         return self.reset_buf * ~self.time_out_buf

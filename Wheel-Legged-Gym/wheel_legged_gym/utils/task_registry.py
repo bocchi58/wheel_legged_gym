@@ -187,9 +187,6 @@ class TaskRegistry:
         # override cfg from args (if specified)
         _, train_cfg = update_cfg_from_args(None, train_cfg, args)
 
-        # 添加自己
-        # train_cfg.runner.load_run = ""
-
         if log_root == "default":
             log_root = os.path.join(
                 WHEEL_LEGGED_GYM_ROOT_DIR,

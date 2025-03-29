@@ -36,15 +36,14 @@ from wheel_legged_gym.envs.base.legged_robot_config import (
 
 class WheelLeggedCfg(LeggedRobotCfg):
 
-#根据实际参数进行修改
     class init_state(LeggedRobotCfg.init_state):
         pos = [0.0, 0.0, 0.25]  # x,y,z [m]
         default_joint_angles = {  # target angles when action = 0.0
-            "lf0_Joint": 0.1,
-            "lf1_Joint": -0.98,
+            "lf0_Joint": 0.5,
+            "lf1_Joint": 0.35,
             "l_wheel_Joint": 0.0,
-            "rf0_Joint": -0.1,
-            "rf1_Joint": 0.98,
+            "rf0_Joint": -0.5,
+            "rf1_Joint": -0.35,
             "r_wheel_Joint": 0.0,
         }
 
@@ -55,13 +54,12 @@ class WheelLeggedCfg(LeggedRobotCfg):
         stiffness = {"f0": 40.0, "f1": 40.0, "wheel": 0}  # [N*m/rad]
         damping = {"f0": 1.0, "f1": 1.0, "wheel": 0.5}  # [N*m*s/rad]
 
-#根据实际参数进行修改
     class asset(LeggedRobotCfg.asset):
-        file = "{WHEEL_LEGGED_GYM_ROOT_DIR}/resources/robots/balance/urdf/balance.urdf"
+        file = "{WHEEL_LEGGED_GYM_ROOT_DIR}/resources/robots/wl/urdf/wl.urdf"
         name = "WheelLegged"
-        offset = 0
-        l1 = 0.215 
-        l2 = 0.251
+        offset = 0.054
+        l1 = 0.15
+        l2 = 0.25
         penalize_contacts_on = ["lf", "rf", "base"]
         terminate_after_contacts_on = ["base"]
         self_collisions = 1  # 1 to disable, 0 to enable...bitwise filter

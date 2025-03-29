@@ -15,7 +15,7 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
         default_joint_angles = { # target angles when action = 0.0
             "lf0_joint": 0.1,
             "lf1_joint": -0.98,
-            "l_wheel_joint": 0.0,
+            "lwheel_joint": 0.0,
             "rf0_joint": -0.1,
             "rf1_joint": 0.98,
             "rwheel_joint": 0.0,
@@ -120,35 +120,43 @@ class Bocchi58WheelLeggedCfg(LeggedRobotCfg):
             tracking_lin_vel_enhance = 1.0
             tracking_ang_vel = 1.0
 
-            base_height = 1.0
-            nominal_state = -0.1
-            lin_vel_z = -2.0
-            ang_vel_xy = -0.05  
-            orientation = -20.0  #姿态控制，主要是控制roll轴，保持roll轴为0
+        class scales: ######################################legged_robot有一个地方会直接给scales乘以dt####################################
+            tracking_lin_vel = 1 #线速度跟踪奖励比例
+            tracking_lin_vel_enhance = 1 #增强线速度跟踪奖励比例
+            tracking_ang_vel = 1 #角速度跟踪奖励比例
+            tracking_ang_vel_enhance = 1
+            
+            base_height = 1.0 #基座高度奖励比例
+            base_height_enhance = 1
+            lin_vel_z = 1 #z轴线速度奖励比例
+            ang_vel_xy = -0.5 #pitch和roll角速度惩罚
+            orientation = -15.0 #姿态惩罚 #负值表示任何偏离期望姿态的情况都会受到惩罚，从而鼓励机器人保持正确的姿态
 
-            dof_vel = -5e-5
-            dof_acc = -2.5e-7
-            torques = -0.0001
-            action_rate = -0.01
-            action_smooth = -0.01
+            dof_vel = -1e-2 #对关节速度的惩罚
+            dof_acc = -4e-7 #对关节加速度的惩罚
+            torques = -0.00000001
+            action_rate = -0.05
+            action_smooth = -0.05
 
-            collision = -1.0
-            dof_pos_limits = -1.0
-
-            spilts = -1.0 #防止劈叉
-            control_theta = -1.0 #控制theta角度尽量为0
-
+            termination = -20 #终止惩罚
+            
+            collision = -1
+            dof_pos_limits = -1
+            
+            split_leg = 1
+            leg_theta = 1
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
-        clip_single_reward = 1
-        tracking_sigma = 0.25  # tracking reward = exp(-error^2/sigma)
+        clip_single_reward = 1.0
+        tracking_sigma = 0.07  # tracking reward = exp(-error^2/sigma)
+        tracking_ang_vel_sigma = 0.1
+        tracking_height_sigma  = 0.005
         soft_dof_pos_limit = (
-            0.97  # percentage of urdf limits, values above this limit are penalized
-        )
-        soft_dof_vel_limit = 1.0
-        soft_torque_limit = 1.0
-        base_height_target = 0.18
-        max_contact_force = 100.0  # forces above this value are penalized
+            0.98  # percentage of urdf limits, values above this limit are penalized
+        ) #超过这个比例的关节位置会被惩罚。
+        soft_dof_vel_limit =  1.0
+        soft_torque_limit  =  1.0
+        max_contact_force  =  150.0  # forces above this value are penalized
 
     #训练策略
 class Bocchi58WheelLeggedCfgPPO(LeggedRobotCfgPPO):

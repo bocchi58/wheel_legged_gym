@@ -38,14 +38,12 @@ from wheel_legged_gym.utils import get_args, export_policy_as_jit, task_registry
 
 import numpy as np
 import torch
-import pygame
-
 
 
 def play(args):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
-    env_cfg.env.episode_length_s = 1000  #时间拉长，方便测试
+    env_cfg.env.episode_length_s = 20
     env_cfg.env.fail_to_terminal_time_s = 3
     env_cfg.env.num_envs = min(env_cfg.env.num_envs, 50)
     env_cfg.terrain.num_rows = 5
@@ -101,50 +99,19 @@ def play(args):
     img_idx = 0
     latent = None
 
-    CoM_offset_compensate = False
+    CoM_offset_compensate = True
     vel_err_intergral = torch.zeros(env.num_envs, device=env.device)
     vel_cmd = torch.zeros(env.num_envs, device=env.device)
 
-    # Initialize pygame
-    pygame.init()
-    screen = pygame.display.set_mode((400, 300))
-    pygame.display.set_caption("Robot Control")
-    env.command[:,2] = 0.25
-
-
     for i in range(1000 * int(env.max_episode_length)):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                return
-
-        keys = pygame.key.get_pressed()
-        #lin_vel_x angle_yaw_vel height
-
-        #lin_vel_x
-        if keys[pygame.K_w]:
-            env.commands[:, 0] = 2.5  # Forward
-        elif keys[pygame.K_s]:
-            env.commands[:, 0] = -2.5  # Backward
-        else:
-            env.commands[:, 0] = 0
-        #angle_yaw_vel
-        if keys[pygame.K_a]:
-            env.commands[:, 1] = 3.14  # Counterclockwise rotation
-        elif keys[pygame.K_d]:
-            env.commands[:, 1] = -3.14  # Clockwise rotation
-        else:
-            env.commands[:, 1] = 0
-        #height
-        if keys[pygame.K_q]:
-            env.commands[:, 2] += 0.01  # Increase leg length
-        elif keys[pygame.K_e]:
-            env.commands[:, 2] -= 0.01  # Decrease leg length
-
         if ppo_runner.alg.actor_critic.is_sequence:
             actions, latent = policy(obs, obs_history)
         else:
             actions = policy(obs.detach())
+
+        env.commands[:, 0] = 2.5
+        env.commands[:, 2] = 0.18  # + 0.07 * np.sin(i * 0.01)
+        env.commands[:, 3] = 0
 
         if CoM_offset_compensate:
             if i > 200 and i < 600:

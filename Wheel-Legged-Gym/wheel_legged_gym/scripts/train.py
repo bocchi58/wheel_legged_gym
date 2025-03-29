@@ -37,7 +37,7 @@ from wheel_legged_gym.envs import *
 from wheel_legged_gym.utils import get_args, task_registry
 import torch
 
-# import gymnasium as gym
+import gymnasium as gym
 
 
 def train(args):
